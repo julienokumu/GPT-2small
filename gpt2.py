@@ -23,10 +23,10 @@ GPT2_124M_CONFIG = {
     "vocab_size": 50257,
     "context_length": 64,
     "emb_dim": 768,
-    "n_head": 12,
-    "n_layer": 12,
-    "drop_rate": 0.1,
-    "qkv_bias": False
+    "n_heads": 12,
+    "n_layers": 12,
+    "qkv_bias": False,
+    "drop_rate": 0.1
 }
 
 # multi-head attention
@@ -37,46 +37,45 @@ class MultiHeadAttention(nn.Module):
         self.d_out = d_out
         self.num_heads = num_heads
         self.head_dim = d_out // num_heads # chunk per head
-        # linear layers for the q, k, v
+        # linear layers for q, k, v
         self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
-        # final layer combining attn outputs
+        # final layer that combines  attn outputs
         self.out_proj = nn.Linear(d_out, d_out)
         self.dropout = nn.Dropout(dropout)
-        # prevent future peeking
-        self.register_buffer = ("mask", torch.triu(torch.ones(context_length, context_length), diagonal=1))
+        # mask to prevent future peeking
+        self.register_buffer("mask", torch.triu(torch.ones(context_length, context_length), diagonal=1))
 
-    # data flow in mah
     def forward(self, x):
         b, num_tokens, d_in = x.shape
-        # transform input to q, k, v
-        queries = self.W_query(x)
+        # transform input to
         keys = self.W_key(x)
+        queries = self.W_query(x)
         values = self.W_value(x)
         # reshape for attn heads
-        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
         keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
+        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim)
         values = values.view(b, num_tokens, self.num_heads, self.head_dim)
-        # swap tokens with
-        queries = queries.transpose(1, 2)
+        # swap token with
         keys = keys.transpose(1, 2)
+        queries = queries.transpose(1, 2)
         values = values.transpose(1, 2)
         # attn scores
         attn_scores = queries @ keys.transpose(2, 3)
-        # mask out future peeking
+        # mask matching current token count
         mask_bool = self.mask.bool()[:num_tokens, :num_tokens]
-        # future score to -infinitiy so theyre ignored
+        # set future tokens to -inf so theyre ignored
         attn_scores.masked_fill_(mask_bool, -torch.inf)
-        # normalize scores into weight, softmax
+        # apply softmax
         attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
         attn_weights = self.dropout(attn_weights)
-        # combine weights to values
+        # combine weights with values to get attn output
         context_vec = (attn_weights @ values).transpose(1, 2)
         # flatten back to original shape
-        context_vec = context_vec.contaguous().view(b, num_tokens, self.d_out)
-        context_vec = self.out_proj(context_vec) # final linear transformation
-        return context_vec # return attn-processed data
+        context_vec = context_vec.contagious().view(b, num_tokens, self.d_out)
+        context_vec = self.out_proj(context_vec)
+        return context_vec # attn processed data
     
 # layer normalization
 class LayerNorm(nn.Module):
@@ -84,13 +83,13 @@ class LayerNorm(nn.Module):
         super().__init__()
         self.eps = 1e-5
         self.scale = nn.Parameter(torch.ones(emb_dim))
-        self.shift = nn.Parameter(torch.ones(emb_dim))
+        self.shift = nn.Parameter(torch.zeros(emb_dim))
 
     def forward(self, x):
         mean = x.mean(dim=-1, keepdim=True) # mean across last emb
-        var = x.var(dim=-1, keepdim=True, unbiased=False) # spread of values
+        var = x.var(dim=-1, keepdim=True, unbiased=False) # spread of values across emb
         norm_x = (x - mean) / torch.sqrt(var + self.eps) # normalize
-        return self.scale * norm_x + self.shift # scale and shift the normalized data
+        return self.scale * norm_x + self.shift # scale and shift normalized data
     
 # thinking curve
 class GELU(nn.Module):
@@ -98,24 +97,23 @@ class GELU(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        # mixes linear and non-linear behaviour
         return 0.5 * x * (1 + torch.tanh(torch.sqrt(torch.tensor(2.0 / torch.pi)) * (x + 0.044715 * torch.pow(x, 3))))
     
 # feedforward network
 class FeedForward(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        # sequence of layers
+        # sequential layers
         self.layers = nn.Sequential(
             nn.Linear(cfg["emb_dim"], 4 * cfg["emb_dim"]), # expand input
             GELU(),
-            nn.Linear(4 * cfg["emb_dim"], cfg["emb_dim"]), # shrink back
+            nn.Linear( 4 * cfg["emb_dim"], cfg["emb_dim"]) # shrink back input
         )
 
     def forward(self, x):
-        return self.layers(x) # pass input through layers and return result
+        return self.layers(x) # pass input through the layers and return result
     
-# transformer block, attn + feedforward
+# transformer block
 class TransformerBlock(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -128,7 +126,7 @@ class TransformerBlock(nn.Module):
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"]
         )
-        # feedforward net with config settings
+        # feedforward network
         self.ff = FeedForward(cfg)
         self.norm1 = LayerNorm(cfg["emb_dim"])
         self.norm2 = LayerNorm(cfg["emb_dim"])
@@ -139,22 +137,23 @@ class TransformerBlock(nn.Module):
         x = self.norm1(x)
         x = self.att(x)
         x = self.drop_shortcut(x)
-        x = x + shortcut # add original input
-        shorcut = x # save input for next residual connection
+        x = x + shortcut # add original input(residual connection)
+        shortcut = x
         x = self.norm2(x)
         x = self.ff(x)
         x = self.drop_shortcut(x)
         x = x + shortcut
         return x # return processed data
-    
-# GPT2 Model
-class GPT2(nn.Module):
+
+# gpt model
+class GPT2Model(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         # token and positional emb layers
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
         self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
-        # stack 12 transformer blocks sequentially
+        self.drop_emb = nn.Dropout(cfg["drop_rate"])
+        # stack 12 transformer layers
         self.trf_blocks = nn.Sequential(
             *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
         )
@@ -163,22 +162,25 @@ class GPT2(nn.Module):
 
     def forward(self, in_idx):
         batch_size, seq_len = in_idx.shape
-        tok_embeds = self.tok_emb(in_idx) # convert token ids to emb
+        tok_embeds = self.tok_emb(in_idx) # token ids to emb
         # positional emb for each position in the sequence
         pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
-        x = pos_embeds + tok_embeds
+        x = tok_embeds + pos_embeds
         x = self.drop_emb(x)
-        x = self.trf_blocks(x) # pass through all trf blocks
+        x = self.trf_blocks(x) # pass through all trf layers
         x = self.final_norm(x)
-        logits = self.out_head(x) # convert to logits
+        logits = self.out_head(x) # convert to logits     
         return logits # return the predictions
     
 # tokenization
 def simple_tokenizer(text, max_vocab=1000):
     words = text.split()
+    # map words to numbers
     word_to_idx = {word: idx for idx, word in enumerate(set(words[:max_vocab]))}
-    tokens = [word_to_idx.get(word, 0) for word in words]
-    seq_len = GPT2_124M_CONFIG["context_length"]
+    # map words to tokens
+    tokens = [word_to_idx(word, 0) for word in words]
+    seq_len = GPT2_124M_CONFIG["context_length"] # max seq length
+    # pas with zeros if too short
     if len(tokens) < seq_len:
         tokens += [0] * (seq_len - len(tokens))
     return torch.tensor(tokens[:seq_len], dtype=torch.long)
@@ -187,26 +189,27 @@ def simple_detokenizer(tokens, text, max_vocab=1000):
     words = text.split()
     word_to_idx = {word: idx for idx, word in enumerate(set(words[:max_vocab]))}
     idx_to_word = {idx: word for word, idx in word_to_idx.items()}
+    # convert each token id back to a word or <unk> if not found
     return [idx_to_word.get(t.item(), "<unk>") for t in tokens]
 
-# data preparation
-def prepare_data():
+# load dataset
+def prepare_dataset():
     dataset = load_dataset("tiny_shakespeare")["train"]
-    text = dataset[0]["text"] # get text
+    text = dataset[0]["text"]
     return text
 
-# split data to batches
+# split data into batches
 def create_batches(text, batch_size=1):
-    tokens = simple_tokenizer(text)
+    tokens = simple_tokenizer(text) # text to tokens
     seq_len = GPT2_124M_CONFIG["context_length"]
-    num_tokens = len(tokens) # count total tokens
-    num_batches = num_tokens // (batch_size * seq_len) # how many full batches fit
+    num_tokens = len(tokens)
+    num_batches = num_tokens // (batch_size * seq_len)
     # truncate tokens to fit into batches
     tokens = tokens[:num_batches * batch_size * seq_len]
-    tokens = tokens.view(batch_size, num_batches * seq_len) # reshape
-    # split into inputs excepts last token, targets shifted by 1
+    tokens = tokens.view(batch_size, num_batches * seq_len)
+    # split into inputs except last token, targets shifted by 1
     inputs = tokens[:, :-1].view(batch_size, -1, seq_len)[:, :-1]
     targets = tokens[:, 1:].view(batch_size, -1, seq_len)[:, :-1]
-    return inputs, targets # return the paired inputs and targets
+    return inputs, targets
 
-        
+
