@@ -172,4 +172,41 @@ class GPT2(nn.Module):
         x = self.final_norm(x)
         logits = self.out_head(x) # convert to logits
         return logits # return the predictions
+    
+# tokenization
+def simple_tokenizer(text, max_vocab=1000):
+    words = text.split()
+    word_to_idx = {word: idx for idx, word in enumerate(set(words[:max_vocab]))}
+    tokens = [word_to_idx.get(word, 0) for word in words]
+    seq_len = GPT2_124M_CONFIG["context_length"]
+    if len(tokens) < seq_len:
+        tokens += [0] * (seq_len - len(tokens))
+    return torch.tensor(tokens[:seq_len], dtype=torch.long)
+
+def simple_detokenizer(tokens, text, max_vocab=1000):
+    words = text.split()
+    word_to_idx = {word: idx for idx, word in enumerate(set(words[:max_vocab]))}
+    idx_to_word = {idx: word for word, idx in word_to_idx.items()}
+    return [idx_to_word.get(t.item(), "<unk>") for t in tokens]
+
+# data preparation
+def prepare_data():
+    dataset = load_dataset("tiny_shakespeare")["train"]
+    text = dataset[0]["text"] # get text
+    return text
+
+# split data to batches
+def create_batches(text, batch_size=1):
+    tokens = simple_tokenizer(text)
+    seq_len = GPT2_124M_CONFIG["context_length"]
+    num_tokens = len(tokens) # count total tokens
+    num_batches = num_tokens // (batch_size * seq_len) # how many full batches fit
+    # truncate tokens to fit into batches
+    tokens = tokens[:num_batches * batch_size * seq_len]
+    tokens = tokens.view(batch_size, num_batches * seq_len) # reshape
+    # split into inputs excepts last token, targets shifted by 1
+    inputs = tokens[:, :-1].view(batch_size, -1, seq_len)[:, :-1]
+    targets = tokens[:, 1:].view(batch_size, -1, seq_len)[:, :-1]
+    return inputs, targets # return the paired inputs and targets
+
         
