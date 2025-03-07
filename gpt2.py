@@ -212,4 +212,58 @@ def create_batches(text, batch_size=1):
     targets = tokens[:, 1:].view(batch_size, -1, seq_len)[:, :-1]
     return inputs, targets
 
+# training
+def train_gpt(model, text, num_epochs=1, batch_size=1, learning_rate=1e-3):
+    device = torch.device("cpu")
+    model = model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
+    inputs, targets = create_batches(text, batch_size)
+    num_batches = input.size(1)
+    model.train()
+    for epoch in range(num_epochs):
+        total_loss = 0
+        for batch_idx in range(num_batches):
+            input_batch = inputs[:, batch_idx, :]
+            target_batch = targets[:, batch_size, :]
+            optimizer.zero_grad()
+            logits = model(input_batch) # run model to get predictions
+            # loss between predictions and targets
+            loss = criterion(logits.view(-1, GPT2_124M_CONFIG["vocab_size"]), target_batch.view(-1))
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1) # limit gradients to avoid explosions
+            optimizer.step()
+            total_loss += loss.item()
+            if (batch_idx + 1) % 100 == 0:
+                print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx+1}/{num_batches}, Loss: {loss.item():.4f}")
+
+        avg_loss = total_loss / num_batches
+        print(f"Epoch {epoch+1}/{num_batches}, Average Loss: {avg_loss:.4f}")
+
+    return model
+
+# text generation
+def generate(model, input_text, text, max_len=20):
+    model.eval()
+    tokens = simple_tokenizer(input_text)
+    input_ids = tokens.unsqueeze(0)
+    with torch.no_grad():
+        for _ in range(max_len):
+            logits = model(input_ids)
+            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            input_ids = torch.cat([input_ids, next_token], dim=1)
+    output_tokens = input_ids[0]
+    # tokens back to words and join into a string
+    return " ".join(simple_detokenizer(output_tokens, text))
+
+if __name__ == "__main__":
+    model = GPT2Model(GPT2_124M_CONFIG)
+    text = prepare_dataset()
+    trained_model = train_gpt(model, text, num_epochs=1, batch_size=1)
+    torch.save(trained_model.state_dict(), "gpt-2small_124m_cpu.pth")
+    input_text = "To be or not to be"
+    generated_text = generate(trained_model, input_text, text)
+    print("GPT-2small:", generated_text)
+
+
 
